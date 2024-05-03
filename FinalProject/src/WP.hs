@@ -85,7 +85,10 @@ class Subst a where
 
 instance Subst Expression where
   subst (Var (Proj _ _)) _ _ = error "Ignore arrays for this project"
-  subst _ _ _ = undefined
+  subst (Var (Name n)) x e' = if n == x then e' else (Var (Name n))
+  subst (Val v) x e' = (Val v)
+  subst (Op1 u e) x e' = (Op1 u (subst e x e'))
+  subst (Op2 e1 b e2) x e' = (Op2 (subst e1 x e') b (subst e2 x e'))
 
 -- | As an example, consider the loop invariant of Square:
 --
@@ -101,7 +104,7 @@ wInv =  Op2 (Op2 (Var (Name "y")) Le (Var (Name "x")))
 -- | When propagating the loop invariant backwards inside the loop body,
 --   we substitute "y+1" for "y" and obtain:
 --
---   y + 1 <= x && z == y * x
+--   y + 1 <= x && z == (y + 1) * x
 --
 --   That is:
 
@@ -120,7 +123,7 @@ test_substExp = TestList [ "exp-subst" ~: subst wInv "y" wYPlus1 ~?= wInvSubstYY
 --   simply a matter of invoking substitution for expressions.
 
 instance Subst Predicate where
-  subst = undefined
+  subst (Predicate e) x e' = Predicate $ subst e x e'
 
 test_substPred :: Test
 test_substPred = TestList [ "pred-subst" ~: subst (Predicate wInv) "y" wYPlus1 ~?= Predicate wInvSubstYY1 ]
@@ -191,14 +194,21 @@ class WP a where
 instance WP Statement where
   wp (Assert _) p = error "Ignore assert for this project"
   wp (Assign (Proj _ _) _) p = error "Ignore arrays for this project"
-  wp _ _ = undefined
+  wp (Assign (Name n) e) p = subst p n e
+  wp (Decl (n,_) e) p = subst p n e
+  wp (If e b1 b2) p = 
+    let (Predicate e1) = wp b1 p in
+    let (Predicate e2) = wp b2 p in
+      Predicate $ Op2 (Op2 e Implies e1) Conj (Op2 (Op1 Not e) Implies e2)
+  wp (While (Predicate p1) e b) p2 = Predicate p1
+  wp Empty p = p
 
 -- | You will also need to implement weakest preconditions for blocks
 --   of statements, by repeatedly getting the weakest precondition
 --   starting from the end.
 --   HINT: folds are your friend.
 instance WP Block where
-  wp _ _ = undefined
+  wp (Block bs) p = foldr (\s p -> (wp s p)) p bs
 
 {- | Verification conditions |
    ---------------------------
@@ -251,14 +261,22 @@ test_vcStmt :: Test
 test_vcStmt =
   TestList [ "vc - while" ~: vcStmt (Predicate wWhilePost) wSquareWhile ~?= vcsWhile ]
 
--- | To implement this, first, calculate the latter two for a single statement:
+-- | To implement this, first, calculate the latter two for a single (While) statement:
 vcStmt :: Predicate -> Statement -> [Predicate]
-vcStmt (Predicate p) (While (Predicate inv) e b) = undefined
+vcStmt (Predicate p) (While (Predicate inv) e b) = 
+  let (Predicate wpB) = wp b (Predicate inv) in
+  let vc1 = Predicate $ Op2 (Op2 inv Conj e) Implies wpB in 
+  let negGuard = Op1 Not e in 
+  let vc2 = Predicate $ Op2 (Op2 inv Conj negGuard) Implies p in
+    [vc1, vc2]
 vcStmt _ _ = []
 
 -- | Then, calculate the while loop verification conditions for blocks.
 vcBlock :: Predicate -> Block -> [Predicate]
-vcBlock = undefined
+vcBlock p (Block stmts) = 
+  let (_, vcs) = foldr (\s (p', ps') -> ((wp s p'), (vcStmt p' s) ++ ps')) (p, []) stmts in
+    vcs
+
 
 {- | Lifting to Methods |
    ----------------------
@@ -291,8 +309,11 @@ vc :: Method -> [Predicate]
 vc (Method _ _ _ specs (Block ss)) =
   let e = ensures specs
       r = requires specs
+      (Predicate wpB) = wp (Block ss) (Predicate e)
+      bodyVC = Predicate $ Op2 r Implies wpB
+      vcsBlock = vcBlock (Predicate e) (Block ss) 
   in
-  undefined
+    bodyVC : vcsBlock
 
 -- | As a complete end-to-end test, the verification conditions for the whole of
 --   the Square method is the list of the following three expressions (in order):

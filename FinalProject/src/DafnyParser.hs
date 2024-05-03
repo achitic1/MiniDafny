@@ -71,7 +71,7 @@ need the `space` parser from the [Parser](Parser.hs) library.
 -}
 
 wsP :: Parser a -> Parser a
-wsP p = undefined
+wsP p = p <* many P.space
 
 test_wsP :: Test
 test_wsP = TestList [
@@ -86,7 +86,7 @@ that trailing whitespace is being treated appropriately.
 -}
 
 stringP :: String -> Parser ()
-stringP = undefined
+stringP s = wsP (P.string s) *> pure () 
 
 test_stringP :: Test
 test_stringP = TestList [
@@ -99,7 +99,7 @@ test_stringP = TestList [
 -- | given value `x`, and also and consume any white space that follows.
 
 constP :: String -> a -> Parser a
-constP _ _ = undefined
+constP s v = stringP s *> pure v
 
 test_constP :: Test
 test_constP = TestList [
@@ -119,7 +119,7 @@ braces x = P.between (stringP "{") x (stringP "}")
 -- >>> P.parse (many (brackets (constP "1" 1))) "[1] [  1]   [1 ]"
 -- Right [1,1,1]
 brackets :: Parser a -> Parser a
-brackets x = undefined
+brackets x = P.between (stringP "[") x (stringP "]")
 
 
 
@@ -141,12 +141,12 @@ valueP = intValP <|> boolValP
 -- >>> P.parse (many intValP) "1 2\n 3"
 -- Right [IntVal 1,IntVal 2,IntVal 3]
 intValP :: Parser Value
-intValP = undefined
+intValP = IntVal <$> (wsP P.int) 
 
 -- >>> P.parse (many boolValP) "true false\n true"
 -- Right [BoolVal True,BoolVal False,BoolVal True]
 boolValP :: Parser Value
-boolValP = undefined
+boolValP = BoolVal <$> ((constP "true" True) <|> (constP "false" False))
 
 -- | At this point you should be able to run tests using the `prop_roundtrip_val` property. 
 
@@ -218,10 +218,24 @@ reserved = [ "assert", "break","else","Length"
  ,"return","true","method","int", "bool"
  ,"while", "requires","ensures"]
 
+-- | nameP Helpers for validating names
+isValid :: String -> Bool
+isValid (s:ss) = notReserved (s:ss) && notDigit s 
+isValid _ = False
+
+notDigit :: Char -> Bool
+notDigit = not . (\c -> Char.isDigit c)
+
+notReserved :: String -> Bool
+notReserved = not . (\s -> elem s reserved)
+
+isValidChar :: Char -> Bool
+isValidChar = (\c -> (not (Char.isSpace c)) && (Char.isAlpha c || Char.isDigit c || c == '_'))
+
 -- >>> P.parse (many nameP) "x sfds _ int"
 -- Right ["x","sfds", "_"]
 nameP :: Parser Name
-nameP = undefined
+nameP = P.filter isValid (wsP (some (P.satisfy (isValidChar))))
 
 -- Now write parsers for the unary and binary operators. Make sure you
 --  check out the Syntax module for the list of all possible
@@ -230,12 +244,31 @@ nameP = undefined
 -- >>> P.parse (many uopP) "- - !"
 -- Right [Neg,Neg,Not]
 uopP :: Parser Uop
-uopP = undefined
+uopP = (constP "-" Neg) <|> (constP "!" Not)
 
 -- >>> P.parse (many bopP) "+ >= &&"
 -- Right [Plus,Ge,Conj]
 bopP :: Parser Bop
-bopP = undefined
+bopP = plusP <|> minusP <|> timesP <|> divideP <|>
+       moduloP <|> impliesP <|> iffP <|> neqP <|> 
+       eqP <|> geP <|> gtP <|> leP <|> ltP <|>
+       conjP <|> disjP
+  where 
+     plusP = constP "+" Plus
+     minusP = constP "-" Minus
+     timesP = constP "*" Times
+     divideP = constP "/" Divide
+     moduloP = constP "%" Modulo
+     eqP = constP "==" Eq
+     neqP = constP "!=" Neq
+     gtP = constP ">" Gt
+     geP = constP ">=" Ge 
+     ltP = constP "<" Lt
+     leP = constP "<=" Le
+     conjP = constP "&&" Conj
+     disjP = constP "||" Disj
+     impliesP = constP "==>" Implies
+     iffP = constP "<==>" Iff
 
 -- | At this point you should be able to test the  `prop_roundtrip_exp` property.
 
@@ -247,16 +280,29 @@ First, define a parser for bindings...
 -}
 
 bindingP :: Parser Binding
-bindingP = undefined
+bindingP = (,) <$> nameP <* stringP ":" <*> typeP
 
 -- | ...and predicates...
 predicateP :: Parser Predicate
-predicateP = undefined
+predicateP = Predicate <$> expP
 
 -- | Finally, define a parser for statements:
 
 statementP :: Parser Statement
-statementP = undefined
+statementP = declP <|> assertP <|> assignP <|> ifP <|> whileP <|> emptyP
+  where 
+    declP = Decl <$> (stringP "var" *> bindingP <* stringP ":=") <*> expP
+    assertP = Assert <$> (stringP "assert" *> predicateP)
+    assignP = Assign <$> varP <* stringP ":=" <*> expP
+    ifP = elseP <|> noElseP 
+      where 
+        elseP = If <$> (stringP "if" *> expP) <*> blockP <* stringP "else" <*> blockP 
+        noElseP = If <$> (stringP "if" *> expP) <*> blockP <*> pure (Block[])
+    whileP = (\exp predicates block -> While predicates exp block)
+      <$> (stringP "while" *> expP)
+      <*> invariantP
+      <*> blockP
+    emptyP = stringP ";" *> pure Empty
 
 
 invariantP :: Parser Predicate
@@ -265,7 +311,7 @@ invariantP = (stringP "invariant" *> predicateP) <|> pure (Predicate (Val (BoolV
 -- | ... and one for blocks.
 
 blockP :: Parser Block
-blockP = undefined
+blockP = Block <$> P.between (stringP "{") (many statementP) (stringP "}")
 
 {- | Parsing Methods
      ---------------
@@ -276,7 +322,32 @@ blockP = undefined
 -}
 
 methodP :: Parser Method
-methodP = undefined
+methodP = returnsP <|> noReturnsP
+  where 
+    returnsP = Method <$> (stringP "method" *> nameP) <*> (bindingsP <* (stringP "returns")) <*> bindingsP <*> specsP <*> blockP
+    noReturnsP = Method <$> (stringP "method" *> nameP) <*> bindingsP <*> pure [] <*> specsP <*> blockP
+
+-- | Specifications
+specP :: Parser Specification 
+specP = requiresP <|> ensuresP <|> modifiesP
+  where 
+    requiresP = rForAllP <|> rNoForAllP
+      where 
+        rNoForAllP = Requires <$> (stringP "requires" *> predicateP)
+        rForAllP = Requires <$> ((stringP "requires" *> stringP "forall") *> predicateP)
+    ensuresP = eForAllP <|> eNoForAllP
+      where 
+        eNoForAllP = Ensures <$> (stringP "ensures" *> predicateP)
+        eForAllP = Ensures <$> ((stringP "ensures" *> stringP "forall") *> predicateP)
+    modifiesP = Modifies <$> nameP
+
+-- | Multiple Specifications
+specsP :: Parser [Specification]
+specsP = many specP
+
+-- | Many bindings ex. (x : int, y : int)
+bindingsP :: Parser [Binding]
+bindingsP = (parens (P.sepBy bindingP (stringP ",")))
 
  
 {- | Parsing Expressions and Files
