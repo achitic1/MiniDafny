@@ -132,10 +132,13 @@ instance PP Int where
 
 -- | TODO: Implement pretty printing for Booleans and lists of integers
 instance PP Bool where
-  pp = undefined
+  pp b = if b then pp "true" else pp "false"
 
 instance PP [Int] where
-  pp = undefined
+  pp l = PP.brackets $ ppAux l where 
+    ppAux [] = PP.empty
+    ppAux (x:xs@[]) = PP.int x <> ppAux xs
+    ppAux (x:xs) = PP.int x <> PP.text "," <> ppAux xs
 
 -- | That should allow you to also pretty pring values if needed.
 instance PP Value where
@@ -146,7 +149,20 @@ instance PP Value where
 -- | TODO: Implement pretty printing for binary operators
 instance PP Bop where
   pp Plus   = PP.char '+'
-  pp _ = undefined
+  pp Minus  = PP.char '-'
+  pp Times  = PP.char '*'
+  pp Divide = PP.char '/'
+  pp Modulo = PP.char '%'
+  pp Eq     = PP.text "=="
+  pp Neq    = PP.text "!="
+  pp Gt     = PP.char '>'
+  pp Ge     = PP.text ">="
+  pp Lt     = PP.char '<'
+  pp Le     = PP.text "<="
+  pp Conj   = PP.text "&&"
+  pp Disj   = PP.text "||"
+  pp Implies = PP.text "==>"
+  pp Iff    = PP.text "<==>"
 
 -- | Types and bindings can be pretty printed
 
@@ -157,7 +173,7 @@ instance PP Type where
 
 -- | TODO: Implement pretty printing for bindings
 instance PP Binding where
-  pp = undefined  
+  pp (x, t) = PP.text x <+> PP.text ":" <+> pp t 
 
 {- |
    Expressions are trickier if you want to avoid putting parentheses everywhere.
@@ -206,29 +222,67 @@ level _      = 2    -- comparison operators
 
 -- | TODO: Implement pretty printing for variables
 instance PP Var where
-  pp = undefined 
+  pp (Name n) = PP.text n
+  pp (Proj n e1) = pp n <> (PP.brackets $ pp e1)
 
 -- | TODO: Implement pretty printing for blocks
 
 instance PP Block where
-  pp = undefined
+  pp (Block []) = PP.empty
+  pp (Block (x:xs)) = pp x PP.$$ pp (Block xs)
 
 -- | TODO: Implement the rest of pretty printing for statements.
 
 instance PP Statement where
   pp Empty = PP.empty
-  pp _ = undefined
+  pp (Decl b e) = (<>) (pp "var" <+> pp b <+> pp ":=" <+> pp e) (pp ";")
+  pp (Assert p) = PP.parens $ pp p <+> pp ";"
+  pp (Assign v e) = pp v <+> pp ":=" <+> pp e <+> pp ";"
+  pp (If e b1 (Block [])) = PP.vcat [ pp "if" <+> PP.parens (pp e) <+> pp "{"
+                                    , PP.nest 2 (pp b1)
+                                    , pp "}" ]
+  pp (If e b1 b2) = PP.vcat [ pp "if" <+> PP.parens (pp e) <+> pp "{"
+                                    , PP.nest 2 (pp b1)
+                                    , pp "}"
+                                    , pp "else {"
+                                    , PP.nest 2 (pp b2)
+                                    , pp "}" ]
+  pp (While p e b) = PP.vcat [ pp "while" <+> PP.parens (pp e)
+                              , PP.nest 2 $ (pp "invariant") <+> (pp p)
+                              , pp "{ "
+                              , PP.nest 2 (pp b)
+                              , pp "}" ]
 
 instance PP [Binding] where
   pp bs = PP.parens $ PP.hsep $ PP.punctuate PP.comma $ map pp bs
 
 -- | TODO: Implement pretty printing for predicates
 instance PP Predicate where
-  pp = undefined
-
+  pp (Predicate e) = pp e
 
 -- | TODO: Finally, implement pretty printing for MiniDafny methods
 
 instance PP Method where
-  pp = undefined
+  pp (Method n args rets specs b) = PP.vcat [ pp "method" <+> pp n <+>
+                                              (pp args) <+>
+                                              pp "returns" <+> (pp rets)
+                                            , PP.nest 2 (pp specs)
+                                            , pp "{ "
+                                            , PP.nest 2 (pp b)
+                                            , pp "}" ]
+
+-- | Added instances for method pretty printing
+instance PP Specification where 
+  pp (Requires p) = pp "requires" <+> pp p 
+  pp (Ensures p) = pp "ensures" <+> pp p
+  pp (Modifies p) = pp "modifies" <+> pp p
+
+instance PP [Specification] where 
+  pp [] = PP.empty
+  pp [s] = pp s 
+  pp (s:ss) = pp s PP.$+$ pp ss
+
+instance PP [Predicate] where 
+  pp ([]) = PP.empty
+  pp (p:ps) = pp p <+> pp ps
 
