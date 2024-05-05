@@ -113,13 +113,50 @@ import qualified Text.PrettyPrint as PP
 
 import System.Process(readProcessWithExitCode)
 import Data.Set(Set)
+import Test.HUnit
 import qualified Data.Set as Set
 
 -- | This is the function you need to implement. You can ignore arrays, as with
 --   the weakest precondition homework, but everything else needs to be handled!
 
 toSMT :: Predicate -> String
-toSMT p = undefined
+toSMT (Predicate e) = 
+  let vars = getVars e Set.empty in 
+  let declarations = foldr (\x decls-> "(declare-const " ++ x ++ " Int)\n" ++ decls) "" vars in 
+  let assertion = "(assert (not " ++ createAssertion e ++ "))\n" in 
+  let checkSat = "(check-sat)" in 
+    declarations ++ assertion ++ checkSat
+
+
+createAssertion :: Expression -> String
+createAssertion (Var (Name n)) = n
+createAssertion (Val (IntVal n)) = show n
+createAssertion (Val (BoolVal b)) = if b then "true" else "false"
+createAssertion (Op1 Neg e) = "(-" ++ (createAssertion e) ++ ")"
+createAssertion (Op1 Not e) = "(not " ++ (createAssertion e) ++ ")"
+createAssertion (Op2 e1 Plus e2) = "(+ " ++ (createAssertion e1) ++ " " ++ (createAssertion e2) ++ ")"
+createAssertion (Op2 e1 Minus e2) = "(- " ++ (createAssertion e1) ++ " " ++ (createAssertion e2) ++ ")"
+createAssertion (Op2 e1 Times e2) = "(* " ++ (createAssertion e1) ++ " " ++ (createAssertion e2) ++ ")"
+createAssertion (Op2 e1 Divide e2) = "(/ " ++ (createAssertion e1) ++ " " ++ (createAssertion e2) ++ ")"
+createAssertion (Op2 e1 Eq e2) = "(= " ++ (createAssertion e1) ++ " " ++ (createAssertion e2) ++ ")"
+createAssertion (Op2 e1 Neq e2) = "(not (= " ++ (createAssertion e1) ++ " " ++ (createAssertion e2) ++ "))"
+createAssertion (Op2 e1 Gt e2) = "(> " ++ (createAssertion e1) ++ " " ++ (createAssertion e2) ++ ")"
+createAssertion (Op2 e1 Ge e2) = "(>= " ++ (createAssertion e1) ++ " " ++ (createAssertion e2) ++ ")"
+createAssertion (Op2 e1 Lt e2) = "(< " ++ (createAssertion e1) ++ " " ++ (createAssertion e2) ++ ")"
+createAssertion (Op2 e1 Le e2) = "(<= " ++ (createAssertion e1) ++ " " ++ (createAssertion e2) ++ ")"
+createAssertion (Op2 e1 Conj e2) = "(and " ++ (createAssertion e1) ++ " " ++ (createAssertion e2) ++ ")"
+createAssertion (Op2 e1 Disj e2) = "(or " ++ (createAssertion e1) ++ " " ++ (createAssertion e2) ++ ")"
+createAssertion (Op2 e1 Implies e2) = "(=> " ++ (createAssertion e1) ++ " " ++ (createAssertion e2) ++ ")"
+createAssertion (Op2 e1 Iff e2) = "(= " ++ (createAssertion e1) ++ " " ++ (createAssertion e2) ++ ")"
+createAssertion _ = ""
+
+-- | Extract all variables within the predicate
+getVars :: Expression -> Set Name -> Set Name
+getVars (Val v) vars = vars
+getVars (Var (Name n)) vars = Set.insert n vars 
+getVars (Op1 uop e) vars = getVars e vars
+getVars (Op2 e1 bop e2) vars = Set.union (getVars e1 vars) (getVars e2 vars)
+getVars _ vars = vars
 
 -- | The name of the z3 executable. Change this to whatever it is in your system:
 --   In unix based systems, this is just "z3".
@@ -138,3 +175,12 @@ convertAndCheck p fn = do
     's':'a':'t':_ -> return False
     'u':'n':'s':'a':'t':_ -> return True
     _ -> error $ "Z3 output was neither sat or unsat: " ++ stdout
+
+
+-- | Unit Tests for helper functions
+
+test_getVars :: Test
+test_getVars = TestList [
+  getVars (Op2 (Var (Name "n")) Gt (Val (IntVal 0))) (Set.empty) ~?= (Set.fromList ["n"]),
+  getVars (Op2 (Op2 (Op2 (Var (Name "min")) Le (Var (Name "x"))) Conj (Op2 (Var (Name "min")) Le (Var (Name "y")))) Conj (Op2 (Op2 (Var (Name "min")) Eq (Var (Name "x"))) Disj (Op2 (Var (Name "min")) Eq (Var (Name "y"))))) (Set.empty) ~?= (Set.fromList ["min", "x", "y"])
+  ]
